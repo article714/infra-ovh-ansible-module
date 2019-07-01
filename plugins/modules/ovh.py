@@ -87,6 +87,11 @@ options:
         default: None
         description:
             - The public IP used in reverse and dns services
+    txt:
+        required: false
+        default: None
+        description:
+            - The value of the TXT to create 
     vrack:
         required: false
         default: None
@@ -504,6 +509,98 @@ def changeDNS(ovhclient, module):
             module.fail_json(
                 changed=False, msg="Failed to call OVH API: {0}".format(apiError)
             )
+    if module.params["domain"] and module.params["txt"]:
+        if module.check_mode:
+            module.exit_json(
+                changed=True,
+                msg="DNS succesfully %s on %s - (dry run mode)"
+                % (module.params["state"], module.params["name"]),
+            )
+        try:
+            check = ovhclient.get(
+                "/domain/zone/%s/record" % module.params["domain"],
+                fieldType=u"TXT",
+                subDomain=module.params["name"],
+            )
+        except APIError as apiError:
+            module.fail_json(
+                changed=False, msg="Failed to call OVH API: {0}".format(apiError)
+            )
+        if module.params["state"] == "present":
+            if not check:
+                try:
+                    result = ovhclient.post(
+                        "/domain/zone/%s/record" % module.params["domain"],
+                        fieldType=u"TXT",
+                        subDomain=module.params["name"],
+                        target=module.params["txt"],
+                    )
+                    module.exit_json(changed=True, contents=result)
+                except APIError as apiError:
+                    module.fail_json(
+                        changed=False,
+                        msg="Failed to call OVH API: {0}".format(apiError),
+                    )
+            else:
+                module.exit_json(
+                    changed=False,
+                    msg="%s is already registered in domain %s"
+                    % (module.params["name"], module.params["domain"]),
+                )
+        elif module.params["state"] == "modified":
+            if check:
+                try:
+                    for ind in check:
+                        resultpost = ovhclient.put(
+                            "/domain/zone/%s/record/%s"
+                            % (module.params["domain"], ind),
+                            subDomain=module.params["name"],
+                            target=module.params["txt"],
+                        )
+                        msg += (
+                            '{ "fieldType": "TXT", "id": "%s", "subDomain": "%s", "target": "%s", "zone": "%s" } '
+                            % (
+                                ind,
+                                module.params["name"],
+                                module.params["txt"],
+                                module.params["domain"],
+                            )
+                        )
+                    module.exit_json(changed=True, msg=msg)
+                except APIError as apiError:
+                    module.fail_json(
+                        changed=False,
+                        msg="Failed to call OVH API: {0}".format(apiError),
+                    )
+            else:
+                module.fail_json(
+                    changed=False,
+                    msg="The target %s doesn't exist in domain %s"
+                    % (module.params["name"], module.params["domain"]),
+                )
+        elif module.params["state"] == "absent":
+            if check:
+                try:
+                    for ind in check:
+                        resultpost = ovhclient.delete(
+                            "/domain/zone/%s/record/%s" % (module.params["domain"], ind)
+                        )
+                    module.exit_json(
+                        changed=True,
+                        msg="Target %s succesfully deleted from domain %s"
+                        % (module.params["name"], module.params["domain"]),
+                    )
+                except APIError as apiError:
+                    module.fail_json(
+                        changed=False,
+                        msg="Failed to call OVH API: {0}".format(apiError),
+                    )
+            else:
+                module.exit_json(
+                    changed=False,
+                    msg="Target %s doesn't exist on domain %s"
+                    % (module.params["name"], module.params["domain"]),
+                )
     if module.params["domain"] and module.params["ip"]:
         if module.check_mode:
             module.exit_json(
@@ -1022,13 +1119,14 @@ def main():
             ),
             domain=dict(required=False, default=None),
             ip=dict(required=False, default=None),
+            txt=dict(required=False, default=None),
             vrack=dict(required=False, default=None),
             boot=dict(default="harddisk", choices=["harddisk", "rescue"]),
             force_reboot=dict(required=False, type="bool", default=False),
             template=dict(required=False, default=None),
             hostname=dict(required=False, default=None),
-            max_retry=dict(required=False, default=10),
-            sleep=dict(required=False, default=10),
+            max_retry=dict(required=False, default="10"),
+            sleep=dict(required=False, default="10"),
             ssh_key_name=dict(required=False, default=None),
             use_distrib_kernel=dict(required=False, type="bool", default=False),
             link_type=dict(
