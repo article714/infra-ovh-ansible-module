@@ -573,11 +573,20 @@ def changeDNS(ovhclient, module):
                         msg="Failed to call OVH API: {0}".format(apiError),
                     )
             else:
-                module.fail_json(
-                    changed=False,
-                    msg="The target %s doesn't exist in domain %s"
-                    % (module.params["name"], module.params["domain"]),
-                )
+                try:
+                    result = ovhclient.post(
+                        "/domain/zone/%s/record" % module.params["domain"],
+                        fieldType=u"TXT",
+                        subDomain=module.params["name"],
+                        target=module.params["txt"],
+                    )
+                    module.exit_json(changed=True, contents=result)
+                except APIError as apiError:
+                    module.fail_json(
+                        changed=False,
+                        msg="Failed to call OVH API: {0}".format(apiError),
+                    )
+                
         elif module.params["state"] == "absent":
             if check:
                 try:
