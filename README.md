@@ -69,6 +69,13 @@ Here are a few examples of what you can do. Please read the module for everythin
     ip: "192.0.21"
     name: "internal.bar"
 
+- name: Add TXT record to DNS
+  ovh:
+    service: dns
+    domain: "example.com"
+    name: "_acme-challenge.site"
+    txt: "d41d8cd98f00b204e9800998ecf8427e"
+
 - name: Refresh domain
   ovh:
     service: dns

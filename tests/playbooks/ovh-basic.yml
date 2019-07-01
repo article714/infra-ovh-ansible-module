@@ -1,0 +1,11 @@
+---
+- hosts: localhost
+  become: true
+  remote_user: root
+  
+  tasks:
+     ovh:
+        service: status
+        name: "ovhname.ovh.eu"
+        max_retry: 150
+        sleep: 10

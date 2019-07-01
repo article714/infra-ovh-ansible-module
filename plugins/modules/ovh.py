@@ -1,5 +1,23 @@
 #!/usr/bin/env python
 
+import ast
+import yaml
+import time
+
+try:
+    import ovh
+    from ovh.exceptions import APIError, ResourceNotFoundError
+
+    HAS_OVH = True
+except ImportError:
+    HAS_OVH = False
+
+from ansible.module_utils.basic import AnsibleModule
+from ansible.utils.display import Display
+from ansible import constants as C
+
+# ANSIBLE META DATA AND DOCUMENTATION
+
 ANSIBLE_METADATA = {
     "metadata_version": "2.3",
     "supported_by": "community",
@@ -62,9 +80,11 @@ options:
         description:
             - Determines whether the dedicated/dns is to be created/modified
               or deleted
+            - If state == 'modified', then entry is created if absent
     service:
         required: true
-        choices: ['boot', 'dns', 'vrack', 'reverse', 'monitoring', 'install', 'status', 'list', 'template', 'terminate']
+        choices: ['boot', 'dns', 'vrack', 'reverse', 'monitoring', 'install', 'status',
+                  'list', 'template', 'terminate']
         description:
             - Determines the service you want to use in the module
               boot, change the bootid and can reboot the dedicated server
@@ -91,7 +111,7 @@ options:
         required: false
         default: None
         description:
-            - The value of the TXT to create 
+            - The value of the TXT to create
     vrack:
         required: false
         default: None
@@ -142,7 +162,15 @@ EXAMPLES = """
 - name: Add server to vrack
   ovh: service='vrack' vrack='VRACK ID' name='HOSTNAME'
 
-# Add a DNS entry for `internal.bar.foo.com`
+# Add a DNS (TXT) entry for `_acme-challenge.site.example.com`
+- name: Add server IP to DNS
+  ovh:
+    service: 'dns'
+    domain: 'example.com'
+    name: '_acme-challenge.site'
+    txt: 'd41d8cd98f00b204e9800998ecf8427e'
+
+# Add a DNS (A) entry for `internal.bar.foo.com`
 - name: Add server IP to DNS
   ovh: service='dns' domain='foo.com' ip='1.2.3.4' name='internal.bar'
 
@@ -202,28 +230,6 @@ EXAMPLES = """
 
 RETURN = """ # """
 
-import ast
-import yaml
-import time
-
-try:
-    import json
-except ImportError:
-    import simplejson as json
-
-try:
-    import ovh
-    import ovh.exceptions
-    from ovh.exceptions import APIError
-
-    HAS_OVH = True
-except ImportError:
-    HAS_OVH = False
-
-from ansible.module_utils.basic import AnsibleModule
-from ansible.utils.display import Display
-from ansible import constants as C
-
 display = Display()
 
 
@@ -232,7 +238,8 @@ def getStatusInstall(ovhclient, module):
         if module.check_mode:
             module.exit_json(changed=False, msg="done - (dry run mode)")
         for i in range(1, int(module.params["max_retry"])):
-            # Messages cannot be displayed in real time (yet): https://github.com/ansible/proposals/issues/92
+            # Messages cannot be displayed in real time (yet):
+            #                 https://github.com/ansible/proposals/issues/92
             display.display(
                 "%i out of %i" % (i, int(module.params["max_retry"])), C.COLOR_VERBOSE
             )
@@ -342,7 +349,14 @@ def launchInstall(ovhclient, module):
             ovhclient.post(
                 "/dedicated/server/%s/install/start" % module.params["name"], **details
             )
-            # TODO : check if details are still properly formed, even for a HW Raid config. For instance:  {"details":{"language":"en","customHostname":"test01.test.synthesio.net","installSqlServer":false,"postInstallationScriptLink":null,"postInstallationScriptReturn":null,"sshKeyName":"deploy","useDistribKernel":true,"useSpla":false,"softRaidDevices":null,"noRaid":false,"diskGroupId":null,"resetHwRaid":false},"templateName":"test"}
+            # TODO : check if details are still properly formed, even for a HW Raid config.
+            #        For instance:  {"details":{"language":"en",
+            #                             "customHostname":"test01.test.synthesio.net",
+            #                             "installSqlServer":false,"postInstallationScriptLink":null,
+            #                             "postInstallationScriptReturn":null,
+            #                             "sshKeyName":"deploy","useDistribKernel":true,
+            #                             "useSpla":false,"softRaidDevices":null,"noRaid":false,
+            #                             "diskGroupId":null,"resetHwRaid":false},"templateName":"test"}
             module.exit_json(
                 changed=True,
                 msg="Installation in progress on %s !" % module.params["name"],
@@ -455,7 +469,7 @@ def changeReverse(ovhclient, module):
             result = ovhclient.get(
                 "/ip/%s/reverse/%s" % (module.params["ip"], module.params["ip"])
             )
-        except ovh.exceptions.ResourceNotFoundError:
+        except ResourceNotFoundError:
             result["reverse"] = ""
         if result["reverse"] != fqdn:
             if module.check_mode:
@@ -510,6 +524,7 @@ def changeDNS(ovhclient, module):
                 changed=False, msg="Failed to call OVH API: {0}".format(apiError)
             )
     if module.params["domain"] and module.params["txt"]:
+        module.params["record_type"] = u"TXT"
         if module.check_mode:
             module.exit_json(
                 changed=True,
@@ -519,7 +534,7 @@ def changeDNS(ovhclient, module):
         try:
             check = ovhclient.get(
                 "/domain/zone/%s/record" % module.params["domain"],
-                fieldType=u"TXT",
+                fieldType=module.params["record_type"],
                 subDomain=module.params["name"],
             )
         except APIError as apiError:
@@ -531,7 +546,7 @@ def changeDNS(ovhclient, module):
                 try:
                     result = ovhclient.post(
                         "/domain/zone/%s/record" % module.params["domain"],
-                        fieldType=u"TXT",
+                        fieldType=module.params["record_type"],
                         subDomain=module.params["name"],
                         target=module.params["txt"],
                     )
@@ -551,20 +566,20 @@ def changeDNS(ovhclient, module):
             if check:
                 try:
                     for ind in check:
-                        resultpost = ovhclient.put(
+                        ovhclient.put(
                             "/domain/zone/%s/record/%s"
                             % (module.params["domain"], ind),
                             subDomain=module.params["name"],
                             target=module.params["txt"],
                         )
                         msg += (
-                            '{ "fieldType": "TXT", "id": "%s", "subDomain": "%s", "target": "%s", "zone": "%s" } '
-                            % (
-                                ind,
-                                module.params["name"],
-                                module.params["txt"],
-                                module.params["domain"],
-                            )
+                            '{ "fieldType": "TXT", "id": "%s", "subDomain": "%s",'
+                            ' "target": "%s", "zone": "%s" } '
+                        ) % (
+                            ind,
+                            module.params["name"],
+                            module.params["txt"],
+                            module.params["domain"],
                         )
                     module.exit_json(changed=True, msg=msg)
                 except APIError as apiError:
@@ -576,7 +591,7 @@ def changeDNS(ovhclient, module):
                 try:
                     result = ovhclient.post(
                         "/domain/zone/%s/record" % module.params["domain"],
-                        fieldType=u"TXT",
+                        fieldType=module.params["record_type"],
                         subDomain=module.params["name"],
                         target=module.params["txt"],
                     )
@@ -586,12 +601,12 @@ def changeDNS(ovhclient, module):
                         changed=False,
                         msg="Failed to call OVH API: {0}".format(apiError),
                     )
-                
+
         elif module.params["state"] == "absent":
             if check:
                 try:
                     for ind in check:
-                        resultpost = ovhclient.delete(
+                        ovhclient.delete(
                             "/domain/zone/%s/record/%s" % (module.params["domain"], ind)
                         )
                     module.exit_json(
@@ -620,7 +635,7 @@ def changeDNS(ovhclient, module):
         try:
             check = ovhclient.get(
                 "/domain/zone/%s/record" % module.params["domain"],
-                fieldType=u"A",
+                fieldType=module.params["record_type"],
                 subDomain=module.params["name"],
             )
         except APIError as apiError:
@@ -632,7 +647,7 @@ def changeDNS(ovhclient, module):
                 try:
                     result = ovhclient.post(
                         "/domain/zone/%s/record" % module.params["domain"],
-                        fieldType=u"A",
+                        fieldType=module.params["record_type"],
                         subDomain=module.params["name"],
                         target=module.params["ip"],
                     )
@@ -652,20 +667,21 @@ def changeDNS(ovhclient, module):
             if check:
                 try:
                     for ind in check:
-                        resultpost = ovhclient.put(
+                        ovhclient.put(
                             "/domain/zone/%s/record/%s"
                             % (module.params["domain"], ind),
                             subDomain=module.params["name"],
                             target=module.params["ip"],
                         )
                         msg += (
-                            '{ "fieldType": "A", "id": "%s", "subDomain": "%s", "target": "%s", "zone": "%s" } '
-                            % (
-                                ind,
-                                module.params["name"],
-                                module.params["ip"],
-                                module.params["domain"],
-                            )
+                            '{ "fieldType": %s, "id": "%s", "subDomain": "%s",'
+                            ' "target": "%s", "zone": "%s" } '
+                        ) % (
+                            module.params["record_type"],
+                            ind,
+                            module.params["name"],
+                            module.params["ip"],
+                            module.params["domain"],
                         )
                     module.exit_json(changed=True, msg=msg)
                 except APIError as apiError:
@@ -683,7 +699,7 @@ def changeDNS(ovhclient, module):
             if check:
                 try:
                     for ind in check:
-                        resultpost = ovhclient.delete(
+                        ovhclient.delete(
                             "/domain/zone/%s/record/%s" % (module.params["domain"], ind)
                         )
                     module.exit_json(
@@ -726,8 +742,10 @@ def changeVRACK(ovhclient, module):
         if module.params["state"] == "present":
             try:
                 # There is no easy way to know if the server is on an old or new network generation.
-                # So we need to call this new route to ask for virtualNetworkInterface, and if the answer is empty, it's on a old generation.
-                # The /vrack/%s/allowedServices route used previously has availability and scaling problems.
+                # So we need to call this new route to ask for virtualNetworkInterface, and if the
+                # answer is empty, it's on a old generation.
+                # The /vrack/%s/allowedServices route used previously has availability and scaling
+                # problems.
                 result = ovhclient.get(
                     "/dedicated/server/%s/virtualNetworkInterface"
                     % module.params["name"],
@@ -737,9 +755,10 @@ def changeVRACK(ovhclient, module):
                 module.fail_json(
                     changed=False, msg="Failed to call OVH API: {0}".format(apiError)
                 )
-            # XXX: In a near future, OVH will add the possibility to add multiple interfaces to the same VRACK or another one
-            # This code may break at this moment because each server will have a list of dedicatedServerInterface
-            # New generation
+            # XXX: In a near future, OVH will add the possibility to add multiple interfaces to the
+            # same VRACK or another one
+            # This code may break at this moment because each server will have a list of
+            # dedicatedServerInterface New generation
             if len(result):
                 try:
                     is_already_registered = ovhclient.get(
@@ -918,13 +937,24 @@ def generateTemplate(ovhclient, module):
                     % module.params["name"]
                 )
                 if len(result["controllers"]) == 1:
-                    # XXX: Only works with a server who has one controller. All the disks in this controller are taken to form one raid
-                    # In the future, some of our servers could have more than one controller, so we will have to adapt this code
+                    # XXX: Only works with a server who has one controller. All the disks in this
+                    # controller are taken to form one raid
+                    # In the future, some of our servers could have more than one controller, so we
+                    # will have to adapt this code
                     disks = result["controllers"][0]["disks"][0]["names"]
                     # if 'raid 1' in conf['raidMode']:
-                    # TODO : create a list of disks like this: {"disks":["[c0:d0,c0:d1]","[c0:d2,c0:d3]","[c0:d4,c0:d5]","[c0:d6,c0:d7]","[c0:d8,c0:d9]","[c0:d10,c0:d11]"],"mode":"raid10","name":"managerHardRaid","step":1}
+                    # TODO : create a list of disks like this: {"disks":["[c0:d0,c0:d1]",
+                    #                                                    "[c0:d2,c0:d3]",
+                    #                                                    "[c0:d4,c0:d5]",
+                    #                                                    "[c0:d6,c0:d7]",
+                    #                                                    "[c0:d8,c0:d9]",
+                    #                                                    "[c0:d10,c0:d11]"],
+                    #                                            "mode":"raid10",
+                    #                                            "name":"managerHardRaid",
+                    #                                            "step":1}
                     # else:
-                    # TODO : for raid 0, it's assumed that a simple list of disks would be sufficient
+                    # TODO : for raid 0, it's assumed that a simple list of disks
+                    #        would be sufficient
                     try:
                         result = ovhclient.post(
                             "/me/installationTemplate/%s/partitionScheme/%s/hardwareRaid"
@@ -942,7 +972,10 @@ def generateTemplate(ovhclient, module):
                 else:
                     module.fail_json(
                         changed=False,
-                        msg="Failed to call OVH API: {0} Code can't handle more than one controller when using Hardware Raid setups",
+                        msg=(
+                            "Failed to call OVH API: {0} Code can't handle more than one "
+                            "controller when using Hardware Raid setups"
+                        ),
                     )
             partition = {}
             for k in conf["partition"]:
@@ -1128,6 +1161,8 @@ def main():
             ),
             domain=dict(required=False, default=None),
             ip=dict(required=False, default=None),
+            record_type=dict(required=False, default=u"A"),
+            value=dict(required=False, default=None),
             txt=dict(required=False, default=None),
             vrack=dict(required=False, default=None),
             boot=dict(default="harddisk", choices=["harddisk", "rescue"]),
