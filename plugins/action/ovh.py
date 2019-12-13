@@ -2,9 +2,7 @@ from __future__ import absolute_import, division, print_function
 
 __metaclass__ = type
 
-import os
-
-from ansible.errors import AnsibleError, AnsibleFileNotFound
+from ansible.errors import AnsibleError
 from ansible.module_utils._text import to_text
 from ansible.plugins.action import ActionBase
 

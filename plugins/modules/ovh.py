@@ -183,7 +183,7 @@ EXAMPLES = """
 
 # Install a server from a template
 - name: Install the dedicated server
-  ovh: endpoint='ovh-eu' application_key='my_app_key' application_secret='my_application_secret' consumer_key='my_consumer_key' service='install' name='foo.ovh.eu' hostname='internal.bar.foo.com' template='SOME TEMPLATE' ssh_key_name='My Key' use_distrib_kernel=True
+    ovh: endpoint='ovh-eu' application_key='my_app_key' application_secret='my_application_secret' consumer_key='my_consumer_key' service='install' name='foo.ovh.eu' hostname='internal.bar.foo.com' template='SOME TEMPLATE' ssh_key_name='My Key' use_distrib_kernel=True
 
 - name: Wait until installation is finished
   local_action:
@@ -1162,7 +1162,6 @@ def main():
             domain=dict(required=False, default=None),
             ip=dict(required=False, default=None),
             record_type=dict(required=False, default=u"A"),
-            value=dict(required=False, default=None),
             txt=dict(required=False, default=None),
             vrack=dict(required=False, default=None),
             boot=dict(default="harddisk", choices=["harddisk", "rescue"]),
